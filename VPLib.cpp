@@ -1,4 +1,4 @@
-#include "VPLib.h"
+﻿#include "VPLib.h"
 #include "Util.h"
 #include "Logger/Writer.h"
 
@@ -6,6 +6,10 @@ using VP::Logger::Log;
 using VP::Logger::LogLevel;
 
 namespace VP {
+    Player::~Player() {
+        UnInit();
+    }
+
     bool Player::Init(const char *InUrl) {
         if (Init_) return true;
 
@@ -85,40 +89,118 @@ namespace VP {
 
         } while (false);
 
-        // clean
         if (!Init_) {
-            if (FormatContext_ != nullptr) {
-                avformat_close_input(&FormatContext_);
-            }
-
-            if (CodecContext_ != nullptr) {
-                avcodec_free_context(&CodecContext_);
-            }
+            UnInit(); // clean
         }
 
         return Init_;
     }
 
+    void Player::UnInit() {
+        Start_ = false;
+        Playing_ = false;
+        if (DecodeThread_) {
+            DecodeThread_->join();
+            DecodeThread_ = nullptr;
+        }
+        if (TimerThread_) {
+            TimerThread_->join();
+            TimerThread_ = nullptr;
+        }
+        if (Packet_ != nullptr) {
+            av_packet_free(&Packet_);
+            Packet_ = nullptr;
+        }
+        if (Frame_ != nullptr) {
+            av_frame_free(&Frame_);
+            Frame_ = nullptr;
+        }
+
+        Stream_ = nullptr;
+        if (CodecContext_ != nullptr) {
+            avcodec_free_context(&CodecContext_);
+            CodecContext_ = nullptr;
+        }
+        if (FormatContext_ != nullptr) {
+            avformat_close_input(&FormatContext_);
+            FormatContext_ = nullptr;
+        }
+        if (SwsContext_ != nullptr) {
+            sws_freeContext(SwsContext_);
+            SwsContext_ = nullptr;
+        }
+        if (ImageData_[0] != nullptr) {
+            av_freep(ImageData_);
+        }
+        for (int i = 0; i < 4; i++) {
+            ImageData_[i] = nullptr;
+            ImageLineSize[i] = 0;
+        }
+        FrameWidth_ = 0;
+        FrameHeight_ = 0;
+        FramePTS_ = 0;
+        Init_ = false;
+    }
+
     bool Player::Play() {
         if (!Init_) return false;
 
+        Start_ = true;
         Playing_ = true;
-        DecodeThread_ = std::make_shared<std::thread>([this]() {
-            this->DoDecode();
-        });
-        DecodeThread_->join();
+        if (DecodeThread_ == nullptr) {
+            DecodeThread_ = std::make_shared<std::thread>([this]() {
+                this->DoDecode();
+            });
+        }
+        if (TimerThread_ == nullptr) {
+            TimerThread_ = std::make_shared<std::thread>([this]() {
+                this->PlaybackTimer();
+            });
+        }
 
-        return DecodeThread_ != nullptr;
+        return true;
+    }
+
+    void Player::PlaybackTimer() {
+        {
+            std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
+            PlaybackTime_ = duration<double>(0);
+        }
+
+        auto PrevTime = steady_clock::now();
+        while (Start_) {
+            if (!Playing_) {
+                PrevTime = steady_clock::now();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
+            auto CurrTime = steady_clock::now();
+            duration<double> Delta = CurrTime - PrevTime;
+            {
+                std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
+                PlaybackTime_ += Delta;
+            }
+        }
+
+        // clear
+        {
+            std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
+            PlaybackTime_ = duration<double>(0);
+        }
     }
 
     void Player::DoDecode() {
-        StartTime_ = steady_clock::now();
         int FrameIndex = -1;
         bool HasPacket = false;
         bool HasFrame = false;
         int ErrNum;
 
-        while (Playing_) {
+        while (Start_) {
+            if (!Playing_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));// 不处于播放状态
+                continue;
+            }
+
             if (HasPacket) {
                 HasPacket = false;
                 av_packet_unref(Packet_);
@@ -131,7 +213,10 @@ namespace VP {
                     if (!Loop_) break;
                     ErrNum = av_seek_frame(FormatContext_, Stream_->index, 0, 0);
                     AssertBreak(ErrNum >= 0, LogLevel::Error, "avformat_open_input failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum))
-                    StartTime_ = steady_clock::now();
+                    {
+                        std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
+                        PlaybackTime_ = duration<double>(0);
+                    }
                     FrameIndex = -1;
                     continue;
                 }
@@ -155,17 +240,15 @@ namespace VP {
             // Sleep until this frame show time
             {
                 FramePTS_ = av_rescale_q(Frame_->pts, Stream_->time_base, AVRational{1, AV_TIME_BASE});// 当前帧的预期播放时间
-                std::chrono::duration<double> CurrTime = steady_clock::now() - StartTime_;
-                while (FramePTS_ > (int64_t) (CurrTime.count() * AV_TIME_BASE)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));// 还没到该帧的显示时间
-                    CurrTime = steady_clock::now() - StartTime_;
+                while (FramePTS_ > (int64_t) (PlaybackTime_.count() * AV_TIME_BASE)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));// 还没到该帧的显示时间
                 }
             }
             sws_scale(SwsContext_, Frame_->data, Frame_->linesize, 0, Frame_->height, ImageData_, ImageLineSize);
             ++FrameIndex;
             Log::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%d", FrameIndex, FramePTS_);
             for (auto &FrameUpdateCallback: FrameUpdateCallbacks_) {
-                FrameUpdateCallback(ImageData_[0], FrameIndex, FramePTS_);
+                FrameUpdateCallback(ImageData_[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height, ImageLineSize[0]);
             }
         }
     }
@@ -229,4 +312,9 @@ namespace VP {
         // if (It != FrameUpdateCallbacks_.end()) return;
         FrameUpdateCallbacks_.emplace_back(InCallback);
     }
+
+    void Player::Pause() {
+        Playing_ = false;
+    }
+
 }

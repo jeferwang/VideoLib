@@ -12,13 +12,13 @@ namespace VP {
             Fatal,
         };
 
-        class ILogWriter {
+        class DllExport ILogWriter {
         public:
             virtual void Write(LogLevel level, const char *time, const char *message) = 0;
 
         };
 
-        class Log {
+        class DllExport Log {
         public:
             static void RegisterLogger(ILogWriter *InWriter);
 
