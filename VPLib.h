@@ -48,6 +48,9 @@ namespace VP {
         // 初始化，打开指定视频文件输入，重复调用无效
         bool Init(const char *InUrl);
 
+        // 执行清理，可重复调用
+        void UnInit();
+
         bool Play();
 
         void Pause();
@@ -61,8 +64,6 @@ namespace VP {
         int32_t GetHeight() const;
 
     private:
-        // 执行清理，可重复调用
-        void UnInit();
 
         void DoDecode();
 

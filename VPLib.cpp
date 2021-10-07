@@ -99,6 +99,7 @@ namespace VP {
     void Player::UnInit() {
         Start_ = false;
         Playing_ = false;
+
         if (DecodeThread_) {
             DecodeThread_->join();
             DecodeThread_ = nullptr;
@@ -106,24 +107,32 @@ namespace VP {
         if (TimerThread_) {
             TimerThread_->join();
             TimerThread_ = nullptr;
+            {
+                std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
+                PlaybackTime_ = duration<double>(0);
+            }
         }
+
         if (Packet_ != nullptr) {
+            av_packet_unref(Packet_);
             av_packet_free(&Packet_);
             Packet_ = nullptr;
         }
         if (Frame_ != nullptr) {
+            av_frame_unref(Frame_);
             av_frame_free(&Frame_);
             Frame_ = nullptr;
         }
 
         Stream_ = nullptr;
-        if (CodecContext_ != nullptr) {
-            avcodec_free_context(&CodecContext_);
-            CodecContext_ = nullptr;
-        }
         if (FormatContext_ != nullptr) {
             avformat_close_input(&FormatContext_);
             FormatContext_ = nullptr;
+        }
+        if (CodecContext_ != nullptr) {
+            avcodec_flush_buffers(CodecContext_);
+            avcodec_free_context(&CodecContext_);
+            CodecContext_ = nullptr;
         }
         if (SwsContext_ != nullptr) {
             sws_freeContext(SwsContext_);
@@ -173,19 +182,15 @@ namespace VP {
                 PrevTime = steady_clock::now();
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
+            } else {
+                auto CurrTime = steady_clock::now();
+                duration<double> Delta = CurrTime - PrevTime;
+                {
+                    std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
+                    PlaybackTime_ += Delta;
+                }
+                PrevTime = CurrTime;
             }
-            auto CurrTime = steady_clock::now();
-            duration<double> Delta = CurrTime - PrevTime;
-            {
-                std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
-                PlaybackTime_ += Delta;
-            }
-        }
-
-        // clear
-        {
-            std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
-            PlaybackTime_ = duration<double>(0);
         }
     }
 
@@ -201,18 +206,19 @@ namespace VP {
                 continue;
             }
 
-            if (HasPacket) {
-                HasPacket = false;
-                av_packet_unref(Packet_);
-            }
-
             // Read next frame packet data
             {
+                if (HasPacket) {
+                    HasPacket = false;
+                    av_packet_unref(Packet_);
+                }
+
                 ErrNum = av_read_frame(FormatContext_, Packet_);
                 if (ErrNum == AVERROR_EOF) {
                     if (!Loop_) break;
                     ErrNum = av_seek_frame(FormatContext_, Stream_->index, 0, 0);
-                    AssertBreak(ErrNum >= 0, LogLevel::Error, "avformat_open_input failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum))
+                    AssertBreak(ErrNum >= 0, LogLevel::Error, "avformat_open_input failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
+                    avcodec_flush_buffers(CodecContext_);
                     {
                         std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
                         PlaybackTime_ = duration<double>(0);
@@ -246,11 +252,13 @@ namespace VP {
             }
             sws_scale(SwsContext_, Frame_->data, Frame_->linesize, 0, Frame_->height, ImageData_, ImageLineSize);
             ++FrameIndex;
-            Log::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%d", FrameIndex, FramePTS_);
+            Log::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%d, PlaybackTime=%f", FrameIndex, FramePTS_, PlaybackTime_.count());
             for (auto &FrameUpdateCallback: FrameUpdateCallbacks_) {
                 FrameUpdateCallback(ImageData_[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height, ImageLineSize[0]);
             }
         }
+        av_packet_unref(Packet_);
+        av_frame_unref(Frame_);
     }
 
     AVCodec *Player::DetectCodec(AVCodecID CodecID) {
