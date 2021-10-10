@@ -1,39 +1,21 @@
-﻿#pragma once
+#pragma once
 
 #include <memory>
 #include <thread>
 #include <functional>
-#include <set>
 #include <vector>
 #include <mutex>
 
-extern "C" {
-#include "libavformat/avformat.h"
-#include "libavutil/error.h"
-#include "libavutil/pixdesc.h"
-#include "libavutil/imgutils.h"
-#include "libswscale/swscale.h"
-}
-
-
-// fix c++ av_err2str compile error
-#undef  av_err2str
-#define av_err2str(errnum) av_make_error_string((char*)_malloca(AV_ERROR_MAX_STRING_SIZE), AV_ERROR_MAX_STRING_SIZE, errnum)
-
-#define AssertBreak(condition, ...) \
-            if (!(condition)) { \
-                Log::Write(__VA_ARGS__); \
-                break;\
-            }
-
-#define AssertRet(condition, ...) \
-            if (!(condition)) { \
-                Log::Write(__VA_ARGS__); \
-                return;\
-            }
-
-typedef std::function<void(void *ImageData, int32_t FrameIndex, int64_t FrameTime, int32_t Width, int32_t Height, int32_t LineSize)> VideoFrameUpdateCallback;
 // typedef void(*VideoFrameUpdateCallback)(void *ImageData, int32_t FrameIndex, int64_t FrameTime);
+typedef std::function<void(void *ImageData, int32_t FrameIndex, int64_t FrameTime, int32_t Width, int32_t Height, int32_t LineSize)> VideoFrameUpdateCallback;
+
+struct AVFormatContext;
+struct AVStream;
+struct AVCodec;
+struct AVCodecContext;
+struct AVPacket;
+struct AVFrame;
+struct SwsContext;
 
 namespace VP {
 
@@ -67,7 +49,7 @@ namespace VP {
 
         void DoDecode();
 
-        static AVCodec *DetectCodec(AVCodecID CodecID);
+        static AVCodec *DetectCodec(int32_t CodecID);
 
         static AVStream *FindVideoStream(AVFormatContext *InFormatContext);
 

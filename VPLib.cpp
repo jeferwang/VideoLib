@@ -1,6 +1,29 @@
-﻿#include "VPLib.h"
+#include "VPLib.h"
 #include "Util.h"
 #include "Logger/Writer.h"
+
+extern "C" {
+#include "libavformat/avformat.h"
+#include "libavutil/error.h"
+#include "libavutil/pixdesc.h"
+#include "libavutil/imgutils.h"
+#include "libswscale/swscale.h"
+}
+
+// fix c++ av_err2str compile error
+#undef  av_err2str
+#define av_err2str(errnum) av_make_error_string((char*)_malloca(AV_ERROR_MAX_STRING_SIZE), AV_ERROR_MAX_STRING_SIZE, errnum)
+
+#define AssertBreak(condition, ...) \
+            if (!(condition)) { \
+                Log::Write(__VA_ARGS__); \
+                break;\
+            }
+#define AssertRet(condition, ...) \
+            if (!(condition)) { \
+                Log::Write(__VA_ARGS__); \
+                return;\
+            }
 
 using VP::Logger::Log;
 using VP::Logger::LogLevel;
@@ -261,7 +284,7 @@ namespace VP {
         av_frame_unref(Frame_);
     }
 
-    AVCodec *Player::DetectCodec(AVCodecID CodecID) {
+    AVCodec *Player::DetectCodec(int32_t CodecID) {
         AVCodec *Codec = nullptr;
         // Detect Hardware Acceleration
         GpuType Type = Util::DetectGPU();
@@ -273,20 +296,22 @@ namespace VP {
                     Codec = avcodec_find_decoder_by_name("hevc_cuvid");
                 }
                 break;
-            case GpuType::AMD:
-                if (CodecID == AV_CODEC_ID_H264) {
-                    Codec = avcodec_find_decoder_by_name("h264_amf");
-                } else if (CodecID == AV_CODEC_ID_HEVC) {
-                    Codec = avcodec_find_decoder_by_name("hevc_amf");
-                }
-                break;
+                // amf do not support decode
+                // case GpuType::AMD:
+                //     if (CodecID == AV_CODEC_ID_H264) {
+                //         Codec = avcodec_find_decoder_by_name("h264_amf");
+                //     } else if (CodecID == AV_CODEC_ID_HEVC) {
+                //         Codec = avcodec_find_decoder_by_name("hevc_amf");
+                //     }
+                //     break;
             case GpuType::UnKnown:
+            default:
                 break;
         }
 
         // Fallback to Soft Codec
         if (Codec == nullptr) {
-            Codec = avcodec_find_decoder(CodecID);
+            Codec = avcodec_find_decoder((AVCodecID) CodecID);
         }
         return Codec;
     }
