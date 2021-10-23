@@ -13,9 +13,11 @@ struct AVFormatContext;
 struct AVStream;
 struct AVCodec;
 struct AVCodecContext;
+struct AVCodecParserContext;
 struct AVPacket;
 struct AVFrame;
 struct SwsContext;
+struct AVBufferRef;
 
 namespace VP {
 
@@ -28,7 +30,7 @@ namespace VP {
         ~Player();
 
         // 初始化，打开指定视频文件输入，重复调用无效
-        bool Init(const char *InUrl);
+        bool Init(const char *InUrl, const uint8_t InAVHWDeviceType);
 
         // 执行清理，可重复调用
         void UnInit();
@@ -46,18 +48,30 @@ namespace VP {
         int32_t GetHeight() const;
 
     private:
-
         void DoDecode();
+
+        void PlaybackTimer();
 
         static AVCodec *DetectCodec(int32_t CodecID);
 
         static AVStream *FindVideoStream(AVFormatContext *InFormatContext);
 
+        int32_t GetHwFormat(AVCodecContext *InCodecContext, const int32_t *InPixFormats);
+
     private:
         bool Init_ = false;
-        std::shared_ptr<std::thread> TimerThread_ = nullptr;
-        std::shared_ptr<std::thread> DecodeThread_ = nullptr;
         std::vector<VideoFrameUpdateCallback> FrameUpdateCallbacks_;
+
+        // 硬解
+        bool UseHwDevice = false;
+        int32_t HwPixFmt = -1; // AVPixelFormat
+        AVBufferRef *HwDeviceCtx = nullptr;
+        AVFrame *HwFrame_ = nullptr;
+
+        // 解码线程
+        std::shared_ptr<std::thread> DecodeThread_ = nullptr;
+        std::shared_ptr<std::thread> TimerThread_ = nullptr;
+
 
         // Playback Control
         bool Start_ = false;// 解码状态，启动和停止
@@ -75,10 +89,8 @@ namespace VP {
         SwsContext *SwsContext_ = nullptr;
         int FrameWidth_ = 0;
         int FrameHeight_ = 0;
-        int64_t FramePTS_ = 0;
+        int64_t FramePTS_ = 0;// 单位：微秒
         uint8_t *ImageData_[4] = {nullptr, nullptr, nullptr, nullptr};
         int ImageLineSize[4] = {0, 0, 0, 0};
-
-        void PlaybackTimer();
     };
 }

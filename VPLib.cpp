@@ -19,21 +19,34 @@ extern "C" {
                 Log::Write(__VA_ARGS__); \
                 break;\
             }
-#define AssertRet(condition, ...) \
-            if (!(condition)) { \
-                Log::Write(__VA_ARGS__); \
-                return;\
-            }
+// #define AssertRet(condition, ...) \
+//             if (!(condition)) { \
+//                 Log::Write(__VA_ARGS__); \
+//                 return;\
+//             }
 
 using VP::Logger::Log;
 using VP::Logger::LogLevel;
 
 namespace VP {
+
+    static enum AVPixelFormat get_hw_format(
+            AVCodecContext *ctx,
+            const enum AVPixelFormat *pix_fmts) {
+        const AVPixelFormat HwPixFmt = *((AVPixelFormat *) (ctx->opaque));
+        const AVPixelFormat *p;
+        for (p = pix_fmts; *p != -1; p++) {
+            if (*p == HwPixFmt) return *p;
+        }
+        Log::Write(LogLevel::Error, "Failed to get HW surface format");
+        return AV_PIX_FMT_NONE;
+    }
+
     Player::~Player() {
         UnInit();
     }
 
-    bool Player::Init(const char *InUrl) {
+    bool Player::Init(const char *InUrl, const uint8_t InAVHWDeviceType) {
         if (Init_) return true;
 
         do {
@@ -49,35 +62,69 @@ namespace VP {
 
             // Open video file and read stream info
             ErrNum = avformat_open_input(&FormatContext_, InUrl, nullptr, nullptr);
-            AssertBreak(ErrNum >= 0, LogLevel::Fatal, "avformat_open_input failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum))
+            AssertBreak(ErrNum >= 0, LogLevel::Fatal, "avformat_open_input failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
             ErrNum = avformat_find_stream_info(FormatContext_, nullptr);
-            AssertBreak(ErrNum >= 0, LogLevel::Fatal, "avformat_find_stream_info failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum))
+            AssertBreak(ErrNum >= 0, LogLevel::Fatal, "avformat_find_stream_info failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
+
+            AVCodec *StreamCodec = nullptr;
+            const auto StreamIndex = av_find_best_stream(FormatContext_, AVMEDIA_TYPE_VIDEO, -1, -1, &StreamCodec, 0);
+            AssertBreak(StreamIndex >= 0, LogLevel::Fatal, "av_find_best_stream failed error=%d, msg=%s", StreamIndex, av_err2str(StreamIndex));
 
             // Find Video Stream_
-            Stream_ = FindVideoStream(FormatContext_);
-            AssertBreak(Stream_ != nullptr, LogLevel::Fatal, "Cannot Find VideoStream")
+            Stream_ = FormatContext_->streams[StreamIndex];// 使用av_find_best_stream的结果来查找Stream
+            // Stream_ = FindVideoStream(FormatContext_); // 查找第一个VideoStream
+            AssertBreak(Stream_ != nullptr, LogLevel::Fatal, "Cannot Find VideoStream");
 
             // Detect Codec
-            AVCodec *Codec = DetectCodec(Stream_->codecpar->codec_id);
-            AssertBreak(Codec != nullptr, LogLevel::Fatal, "Cannot Find Stream_ Codec")
+            AVCodec *Codec = nullptr;
+            UseHwDevice = InAVHWDeviceType != AVHWDeviceType::AV_HWDEVICE_TYPE_NONE;
+            if (InAVHWDeviceType == AVHWDeviceType::AV_HWDEVICE_TYPE_NONE) {
+                Codec = DetectCodec(Stream_->codecpar->codec_id);
+                AssertBreak(Codec != nullptr, LogLevel::Fatal, "Cannot Find Stream_ Codec");
+            } else {
+                for (int32_t i = 0;; i++) {
+                    Codec = StreamCodec;
+                    const AVCodecHWConfig *Config = avcodec_get_hw_config(StreamCodec, i);
+                    AssertBreak(Config, LogLevel::Fatal,
+                                "Decoder %s does not support device type %s",
+                                StreamCodec->name, av_hwdevice_get_type_name((AVHWDeviceType) InAVHWDeviceType));
+                    if (Config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX
+                        && Config->device_type == InAVHWDeviceType) {
+                        HwPixFmt = Config->pix_fmt;
+                        break;// Decoder Found.
+                    }
+                }
+            }
 
-            // Create Codec Context
+
+            // Create Codec Context and Parser Context
             CodecContext_ = avcodec_alloc_context3(Codec);
-            AssertBreak(CodecContext_ != nullptr, LogLevel::Fatal, "Cannot Find Stream_ Codec")
+            AssertBreak(CodecContext_ != nullptr, LogLevel::Fatal, "Cannot Find Stream_ Codec");
 
             // Init Codec Context From Stream_ Parameter
             ErrNum = avcodec_parameters_to_context(CodecContext_, Stream_->codecpar);
-            AssertBreak(ErrNum >= 0, LogLevel::Fatal, "avcodec_parameters_to_context init CodecContext_ failed error=%d, msg=%s",
-                        ErrNum, av_err2str(ErrNum))
+            AssertBreak(ErrNum >= 0, LogLevel::Fatal,
+                        "avcodec_parameters_to_context init CodecContext_ failed error=%d, msg=%s",
+                        ErrNum, av_err2str(ErrNum));
+
+            if (UseHwDevice) {
+                CodecContext_->opaque = &HwPixFmt;
+                CodecContext_->get_format = get_hw_format;
+                ErrNum = av_hwdevice_ctx_create(&HwDeviceCtx, (AVHWDeviceType) InAVHWDeviceType, nullptr, nullptr, 0);
+                AssertBreak(ErrNum >= 0, LogLevel::Fatal,
+                            "av_hwdevice_ctx_create Failed to create specified HW device error=%d, msg=%s",
+                            ErrNum, av_err2str(ErrNum));
+                CodecContext_->hw_device_ctx = HwDeviceCtx;
+            }
 
             // Initialize AVCodecContext use given AVCodec
             ErrNum = avcodec_open2(CodecContext_, Codec, nullptr);
             AssertBreak(ErrNum >= 0, LogLevel::Fatal, "avcodec_open2 Initialize the AVCodecContext to use the given AVCodec failed error=%d, msg=%s",
-                        ErrNum, av_err2str(ErrNum))
+                        ErrNum, av_err2str(ErrNum));
 
             // Print Video Info
             Log::Write(LogLevel::Info,
-                       "VideoInfo: InFile=%s, Format=%s, CodecID=%s, Codec=%s, PixFmt=%s, Size=%dx%d, Length=%us, Fps=%f, FrameNum=%d",
+                       "VideoInfo: InFile=%s, Format=%s, CodecID=%s, Codec=%s, HwPixFmt=%s, Size=%dx%d, Length=%us, Fps=%f, FrameNum=%d",
                        InUrl, FormatContext_->iformat->name, avcodec_get_name(Stream_->codecpar->codec_id), Codec->name,
                        av_get_pix_fmt_name(CodecContext_->pix_fmt),
                        Stream_->codecpar->width, Stream_->codecpar->height,
@@ -92,13 +139,14 @@ namespace VP {
 
             // Init Frame_ and FrameSize
             if (Frame_ == nullptr) Frame_ = av_frame_alloc();
-            FrameWidth_ = CodecContext_->width;
-            FrameHeight_ = CodecContext_->height;
+            if (UseHwDevice && HwFrame_ == nullptr) HwFrame_ = av_frame_alloc();
 
             // Init Image Data
+            FrameWidth_ = CodecContext_->width;
+            FrameHeight_ = CodecContext_->height;
             if (ImageData_[0] != nullptr) av_freep(ImageData_);
             ErrNum = av_image_alloc(ImageData_, ImageLineSize, FrameWidth_, FrameHeight_, AV_PIX_FMT_RGBA, 1);
-            AssertBreak(ErrNum >= 0, LogLevel::Fatal, "av_image_alloc failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum))
+            AssertBreak(ErrNum >= 0, LogLevel::Fatal, "av_image_alloc failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
 
             // Init SwsContext
             if (SwsContext_ != nullptr) sws_freeContext(SwsContext_);
@@ -106,7 +154,7 @@ namespace VP {
                     FrameWidth_, FrameHeight_, CodecContext_->pix_fmt,//src
                     FrameWidth_, FrameHeight_, AV_PIX_FMT_RGBA,//dst
                     SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-            AssertBreak(SwsContext_ != nullptr, LogLevel::Fatal, "sws_getContext failed")
+            AssertBreak(SwsContext_ != nullptr, LogLevel::Fatal, "sws_getContext failed");
 
             Init_ = true;
 
@@ -145,6 +193,11 @@ namespace VP {
             av_frame_unref(Frame_);
             av_frame_free(&Frame_);
             Frame_ = nullptr;
+        }
+        if (HwFrame_ != nullptr) {
+            av_frame_unref(HwFrame_);
+            av_frame_free(&HwFrame_);
+            HwFrame_ = nullptr;
         }
 
         Stream_ = nullptr;
@@ -249,7 +302,7 @@ namespace VP {
                     FrameIndex = -1;
                     continue;
                 }
-                AssertBreak(ErrNum >= 0, LogLevel::Error, "av_read_frame failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum))
+                AssertBreak(ErrNum >= 0, LogLevel::Error, "av_read_frame failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
                 HasPacket = true;
             }
 
@@ -257,24 +310,34 @@ namespace VP {
             {
                 ErrNum = avcodec_send_packet(CodecContext_, Packet_);
                 if (ErrNum == AVERROR(EAGAIN)) continue; // 当前状态不接受输入
-                AssertBreak(ErrNum == 0, LogLevel::Error, "avcodec_send_packet failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum))
+                AssertBreak(ErrNum == 0, LogLevel::Error, "avcodec_send_packet failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
 
                 HasFrame = false;
-                ErrNum = avcodec_receive_frame(CodecContext_, Frame_);
-                if (ErrNum == AVERROR(EAGAIN)) continue; // 当前状态输出不可用
-                AssertBreak(ErrNum == 0, LogLevel::Error, "avcodec_receive_frame failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum))
+                if (UseHwDevice) {
+                    ErrNum = avcodec_receive_frame(CodecContext_, HwFrame_);
+                    if (ErrNum == AVERROR(EAGAIN) || ErrNum == AVERROR_EOF) continue; // 当前状态输出不可用
+                    ErrNum = av_hwframe_transfer_data(Frame_, HwFrame_, 0);
+                    AssertBreak(ErrNum == 0, LogLevel::Error, "av_hwframe_transfer_data Error transferring the data to system memory error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
+                } else {
+                    ErrNum = avcodec_receive_frame(CodecContext_, Frame_);
+                    if (ErrNum == AVERROR(EAGAIN) || ErrNum == AVERROR_EOF) continue; // 当前状态输出不可用
+                }
+                AssertBreak(ErrNum == 0, LogLevel::Error, "avcodec_receive_frame failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
+                ++FrameIndex;
                 HasFrame = true;
             }
 
             // Sleep until this frame show time
             {
-                FramePTS_ = av_rescale_q(Frame_->pts, Stream_->time_base, AVRational{1, AV_TIME_BASE});// 当前帧的预期播放时间
+                // 当前帧的预期播放时间
+                FramePTS_ = FrameIndex * AV_TIME_BASE / int64_t(av_q2d(Stream_->avg_frame_rate));
+                // FramePTS_ = av_rescale_q(Frame_->pts, Stream_->time_base, AVRational{1, AV_TIME_BASE});//硬件加速不支持计算帧时间
                 while (FramePTS_ > (int64_t) (PlaybackTime_.count() * AV_TIME_BASE)) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));// 还没到该帧的显示时间
                 }
             }
+            // todo sws硬件加速不可用
             sws_scale(SwsContext_, Frame_->data, Frame_->linesize, 0, Frame_->height, ImageData_, ImageLineSize);
-            ++FrameIndex;
             Log::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%d, PlaybackTime=%f", FrameIndex, FramePTS_, PlaybackTime_.count());
             for (auto &FrameUpdateCallback: FrameUpdateCallbacks_) {
                 FrameUpdateCallback(ImageData_[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height, ImageLineSize[0]);
@@ -348,6 +411,10 @@ namespace VP {
 
     void Player::Pause() {
         Playing_ = false;
+    }
+
+    int32_t Player::GetHwFormat(AVCodecContext *InCodecContext, const int32_t *InPixFormats) {
+        return 0;
     }
 
 }
