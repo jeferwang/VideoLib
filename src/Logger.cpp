@@ -1,8 +1,8 @@
 #include <vector>
 #include <ctime>
-#include <stdarg.h>
+#include <cstdarg>
 #include "vadefs.h"
-#include "Writer.h"
+#include "Logger.h"
 
 namespace VP {
     namespace Logger {

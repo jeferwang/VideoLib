@@ -1,5 +1,5 @@
 #pragma once
-
+#include "Base.h"
 #include <set>
 
 namespace VP {
@@ -12,13 +12,13 @@ namespace VP {
             Fatal,
         };
 
-        class DllExport ILogWriter {
+        class VP_DLL_EXPORT ILogWriter {
         public:
+            virtual ~ILogWriter() = default;
             virtual void Write(LogLevel level, const char *time, const char *message) = 0;
-
         };
 
-        class DllExport Log {
+        class VP_DLL_EXPORT Log {
         public:
             static void RegisterLogger(ILogWriter *InWriter);
 

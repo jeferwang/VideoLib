@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Base.h"
 #include <memory>
 #include <thread>
 #include <functional>
@@ -7,7 +8,7 @@
 #include <mutex>
 
 // typedef void(*VideoFrameUpdateCallback)(void *ImageData, int32_t FrameIndex, int64_t FrameTime);
-typedef std::function<void(void *ImageData, int32_t FrameIndex, int64_t FrameTime, int32_t Width, int32_t Height, int32_t LineSize)> VideoFrameUpdateCallback;
+typedef std::function<void(void *ImageData, int64_t FrameIndex, int64_t FrameTime, int32_t Width, int32_t Height)> VideoFrameUpdateCallback;
 
 struct AVFormatContext;
 struct AVStream;
@@ -25,12 +26,14 @@ namespace VP {
     using std::chrono::time_point;
     using std::chrono::steady_clock;
 
-    class DllExport Player final {
+    class VP_DLL_EXPORT Player final {
     public:
+        Player();
+
         ~Player();
 
         // 初始化，打开指定视频文件输入，重复调用无效
-        bool Init(const char *InUrl, const uint8_t InAVHWDeviceType);
+        bool Init(const char *InUrl, uint8_t InAVHWDeviceType);
 
         // 执行清理，可重复调用
         void UnInit();
@@ -46,6 +49,8 @@ namespace VP {
         int32_t GetWidth() const;
 
         int32_t GetHeight() const;
+
+        bool IsUseHwDevice() const;
 
     private:
         void DoDecode();
@@ -64,21 +69,21 @@ namespace VP {
 
         // 硬解
         bool UseHwDevice = false;
+        uint8_t HWDeviceType = 0;//AVHWDeviceType
         int32_t HwPixFmt = -1; // AVPixelFormat
         AVBufferRef *HwDeviceCtx = nullptr;
-        AVFrame *HwFrame_ = nullptr;
+        // AVFrame *HwFrame_ = nullptr;
 
         // 解码线程
         std::shared_ptr<std::thread> DecodeThread_ = nullptr;
+        std::mutex PlaybackTimeMutex_; // 修改PlaybackTime的时候需要加锁
         std::shared_ptr<std::thread> TimerThread_ = nullptr;
-
 
         // Playback Control
         bool Start_ = false;// 解码状态，启动和停止
         bool Playing_ = false;// 播放状态，播放和暂停
         bool Loop_ = false;
         duration<double> PlaybackTime_ = duration<double>(0);// 播放进度
-        std::mutex PlaybackTimeMutex_;
 
         // Decode params
         AVFormatContext *FormatContext_ = nullptr;

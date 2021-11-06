@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Writer.h"
+#include "Logger.h"
 
 namespace VP {
     namespace Logger {
-        class DllExport ConsoleLogWriter : public ILogWriter {
+        class VP_DLL_EXPORT ConsoleLogWriter : public ILogWriter {
         public:
             void Write(LogLevel level, const char *time, const char *message) override;
         };

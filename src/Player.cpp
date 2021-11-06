@@ -1,6 +1,11 @@
-#include "VPLib.h"
+#include "Player.h"
 #include "Util.h"
-#include "Logger/Writer.h"
+#include "Logger.h"
+#include <memory>
+#include <thread>
+#include <functional>
+#include <vector>
+#include <mutex>
 
 extern "C" {
 #include "libavformat/avformat.h"
@@ -29,10 +34,7 @@ using VP::Logger::Log;
 using VP::Logger::LogLevel;
 
 namespace VP {
-
-    static enum AVPixelFormat get_hw_format(
-            AVCodecContext *ctx,
-            const enum AVPixelFormat *pix_fmts) {
+    static AVPixelFormat get_hw_format(AVCodecContext *ctx, const AVPixelFormat *pix_fmts) {
         const AVPixelFormat HwPixFmt = *((AVPixelFormat *) (ctx->opaque));
         const AVPixelFormat *p;
         for (p = pix_fmts; *p != -1; p++) {
@@ -42,12 +44,16 @@ namespace VP {
         return AV_PIX_FMT_NONE;
     }
 
+    Player::Player() = default;
+
     Player::~Player() {
         UnInit();
     }
 
     bool Player::Init(const char *InUrl, const uint8_t InAVHWDeviceType) {
         if (Init_) return true;
+
+        HWDeviceType = InAVHWDeviceType;
 
         do {
             if (FormatContext_ != nullptr) {
@@ -67,7 +73,7 @@ namespace VP {
             AssertBreak(ErrNum >= 0, LogLevel::Fatal, "avformat_find_stream_info failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
 
             AVCodec *StreamCodec = nullptr;
-            const auto StreamIndex = av_find_best_stream(FormatContext_, AVMEDIA_TYPE_VIDEO, -1, -1, &StreamCodec, 0);
+            const int StreamIndex = av_find_best_stream(FormatContext_, AVMEDIA_TYPE_VIDEO, -1, -1, &StreamCodec, 0);
             AssertBreak(StreamIndex >= 0, LogLevel::Fatal, "av_find_best_stream failed error=%d, msg=%s", StreamIndex, av_err2str(StreamIndex));
 
             // Find Video Stream_
@@ -97,7 +103,7 @@ namespace VP {
             }
 
 
-            // Create Codec Context and Parser Context
+            // Create Codec Context
             CodecContext_ = avcodec_alloc_context3(Codec);
             AssertBreak(CodecContext_ != nullptr, LogLevel::Fatal, "Cannot Find Stream_ Codec");
 
@@ -139,7 +145,7 @@ namespace VP {
 
             // Init Frame_ and FrameSize
             if (Frame_ == nullptr) Frame_ = av_frame_alloc();
-            if (UseHwDevice && HwFrame_ == nullptr) HwFrame_ = av_frame_alloc();
+            // if (UseHwDevice && HwFrame_ == nullptr) HwFrame_ = av_frame_alloc();
 
             // Init Image Data
             FrameWidth_ = CodecContext_->width;
@@ -194,11 +200,11 @@ namespace VP {
             av_frame_free(&Frame_);
             Frame_ = nullptr;
         }
-        if (HwFrame_ != nullptr) {
-            av_frame_unref(HwFrame_);
-            av_frame_free(&HwFrame_);
-            HwFrame_ = nullptr;
-        }
+        // if (HwFrame_ != nullptr) {
+        //     av_frame_unref(HwFrame_);
+        //     av_frame_free(&HwFrame_);
+        //     HwFrame_ = nullptr;
+        // }
 
         Stream_ = nullptr;
         if (FormatContext_ != nullptr) {
@@ -271,10 +277,10 @@ namespace VP {
     }
 
     void Player::DoDecode() {
-        int FrameIndex = -1;
+        int32_t FrameIndex = -1;
         bool HasPacket = false;
         bool HasFrame = false;
-        int ErrNum;
+        int32_t ErrNum;
 
         while (Start_) {
             if (!Playing_) {
@@ -303,6 +309,10 @@ namespace VP {
                     continue;
                 }
                 AssertBreak(ErrNum >= 0, LogLevel::Error, "av_read_frame failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
+
+                if (Packet_->stream_index != Stream_->index) {
+                    continue;
+                }
                 HasPacket = true;
             }
 
@@ -314,10 +324,10 @@ namespace VP {
 
                 HasFrame = false;
                 if (UseHwDevice) {
-                    ErrNum = avcodec_receive_frame(CodecContext_, HwFrame_);
+                    ErrNum = avcodec_receive_frame(CodecContext_, Frame_);
                     if (ErrNum == AVERROR(EAGAIN) || ErrNum == AVERROR_EOF) continue; // 当前状态输出不可用
-                    ErrNum = av_hwframe_transfer_data(Frame_, HwFrame_, 0);
-                    AssertBreak(ErrNum == 0, LogLevel::Error, "av_hwframe_transfer_data Error transferring the data to system memory error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
+                    // ErrNum = av_hwframe_transfer_data(Frame_, HwFrame_, 0);
+                    // AssertBreak(ErrNum == 0, LogLevel::Error, "av_hwframe_transfer_data Error transferring the data to system memory error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
                 } else {
                     ErrNum = avcodec_receive_frame(CodecContext_, Frame_);
                     if (ErrNum == AVERROR(EAGAIN) || ErrNum == AVERROR_EOF) continue; // 当前状态输出不可用
@@ -330,17 +340,27 @@ namespace VP {
             // Sleep until this frame show time
             {
                 // 当前帧的预期播放时间
-                FramePTS_ = FrameIndex * AV_TIME_BASE / int64_t(av_q2d(Stream_->avg_frame_rate));
+                FramePTS_ = (int64_t) FrameIndex * (int64_t) AV_TIME_BASE / int64_t(av_q2d(Stream_->avg_frame_rate));
                 // FramePTS_ = av_rescale_q(Frame_->pts, Stream_->time_base, AVRational{1, AV_TIME_BASE});//硬件加速不支持计算帧时间
                 while (FramePTS_ > (int64_t) (PlaybackTime_.count() * AV_TIME_BASE)) {
+                    if (!Start_) break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));// 还没到该帧的显示时间
                 }
             }
-            // todo sws硬件加速不可用
-            sws_scale(SwsContext_, Frame_->data, Frame_->linesize, 0, Frame_->height, ImageData_, ImageLineSize);
             Log::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%d, PlaybackTime=%f", FrameIndex, FramePTS_, PlaybackTime_.count());
             for (auto &FrameUpdateCallback: FrameUpdateCallbacks_) {
-                FrameUpdateCallback(ImageData_[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height, ImageLineSize[0]);
+                switch (Frame_->format) {
+                    case AV_PIX_FMT_NV12:
+                        sws_scale(SwsContext_, Frame_->data, Frame_->linesize, 0, Frame_->height, ImageData_, ImageLineSize);//NV12转换成RGBA
+                        FrameUpdateCallback(ImageData_[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height);// 返回RGBA
+                        break;
+                    case AV_PIX_FMT_D3D11:
+                        FrameUpdateCallback(Frame_->data[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height);// 直接返回ID3D11Texture2D pointer
+                        break;
+                    default:
+                        Log::Write(LogLevel::Error, "UnSupported PixFmt %d", (int64_t) CodecContext_->pix_fmt);
+                        break;
+                }
             }
         }
         av_packet_unref(Packet_);
@@ -417,4 +437,7 @@ namespace VP {
         return 0;
     }
 
+    bool Player::IsUseHwDevice() const {
+        return UseHwDevice;
+    }
 }
