@@ -6,8 +6,8 @@
 
 int main() {
     // add a LoggerWriter
-    auto ConsoleWriter = new VP::Logger::ConsoleLogWriter();
-    VP::Logger::Log::RegisterLogger(ConsoleWriter);
+    auto ConsoleWriter = new Log::ConsoleLogWriter();
+    Log::Logger::RegisterLogger(ConsoleWriter);
     // init VideoPlayer
     // std::string Url = "D:/Projects/XDance3.0/Game/Saved/StagedBuilds/WindowsNoEditor/XDance/Content/Coaches/chongqingdeweidaozuo1_2160p/Video.mp4";
     std::string Url = "D:/Projects/VPDemo/Content/Movies/lumi.mp4";
@@ -18,7 +18,7 @@ int main() {
         //char FileName[256] = {'\0'};
         //std::snprintf(FileName, 256, "D:/Projects/VPLib/Frame/%d.png", FrameIndex);
         //unsigned error = lodepng_encode32_file(FileName, (uint8_t *) ImageData, P.GetWidth(), P.GetHeight());
-        //VP::Logger::Log::Write(VP::Logger::LogLevel::Info, "lodepng_encode32_file error=%d", error);
+        //VP::Logger::Logger::Write(VP::Logger::LogLevel::Info, "lodepng_encode32_file error=%d", error);
     });
     P.Play();
     std::this_thread::sleep_for(std::chrono::seconds(60));

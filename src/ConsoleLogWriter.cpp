@@ -5,13 +5,11 @@
 #include <cstdio>
 #include "ConsoleLogWriter.h"
 
-namespace VP {
-    namespace Logger {
-        void ConsoleLogWriter::Write(
-                VP::Logger::LogLevel level,
-                const char *time,
-                const char *message) {
-            std::printf("%s %s %s\n", time, Log::GetLogLevelName(level), message);
-        }
+namespace Log {
+    void ConsoleLogWriter::Write(
+            Log::LogLevel level,
+            const char *time,
+            const char *message) {
+        std::printf("%s %s %s\n", time, Logger::GetLogLevelName(level), message);
     }
 }

@@ -1,6 +1,6 @@
 #include "Player.h"
 #include "Util.h"
-#include "Logger.h"
+#include "LogWriter.h"
 #include <memory>
 #include <thread>
 #include <functional>
@@ -21,17 +21,17 @@ extern "C" {
 
 #define AssertBreak(condition, ...) \
             if (!(condition)) { \
-                Log::Write(__VA_ARGS__); \
+                Logger::Write(__VA_ARGS__); \
                 break;\
             }
 // #define AssertRet(condition, ...) \
 //             if (!(condition)) { \
-//                 Log::Write(__VA_ARGS__); \
+//                 Logger::Write(__VA_ARGS__); \
 //                 return;\
 //             }
 
-using VP::Logger::Log;
-using VP::Logger::LogLevel;
+using Log::Logger;
+using Log::LogLevel;
 
 namespace VP {
     static AVPixelFormat get_hw_format(AVCodecContext *ctx, const AVPixelFormat *pix_fmts) {
@@ -40,7 +40,7 @@ namespace VP {
         for (p = pix_fmts; *p != -1; p++) {
             if (*p == HwPixFmt) return *p;
         }
-        Log::Write(LogLevel::Error, "Failed to get HW surface format");
+        Logger::Write(LogLevel::Error, "Failed to get HW surface format");
         return AV_PIX_FMT_NONE;
     }
 
@@ -129,7 +129,7 @@ namespace VP {
                         ErrNum, av_err2str(ErrNum));
 
             // Print Video Info
-            Log::Write(LogLevel::Info,
+            Logger::Write(LogLevel::Info,
                        "VideoInfo: InFile=%s, Format=%s, CodecID=%s, Codec=%s, HwPixFmt=%s, Size=%dx%d, Length=%us, Fps=%f, FrameNum=%d",
                        InUrl, FormatContext_->iformat->name, avcodec_get_name(Stream_->codecpar->codec_id), Codec->name,
                        av_get_pix_fmt_name(CodecContext_->pix_fmt),
@@ -347,7 +347,7 @@ namespace VP {
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));// 还没到该帧的显示时间
                 }
             }
-            Log::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%d, PlaybackTime=%f", FrameIndex, FramePTS_, PlaybackTime_.count());
+            Logger::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%d, PlaybackTime=%f", FrameIndex, FramePTS_, PlaybackTime_.count());
             for (auto &FrameUpdateCallback: FrameUpdateCallbacks_) {
                 switch (Frame_->format) {
                     case AV_PIX_FMT_NV12:
@@ -358,7 +358,7 @@ namespace VP {
                         FrameUpdateCallback(Frame_->data[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height);// 直接返回ID3D11Texture2D pointer
                         break;
                     default:
-                        Log::Write(LogLevel::Error, "UnSupported PixFmt %d", (int64_t) CodecContext_->pix_fmt);
+                        Logger::Write(LogLevel::Error, "UnSupported PixFmt %d", (int64_t) CodecContext_->pix_fmt);
                         break;
                 }
             }

@@ -26,7 +26,7 @@ namespace VP {
     using std::chrono::time_point;
     using std::chrono::steady_clock;
 
-    class VP_DLL_EXPORT Player final {
+    class VP_API Player final {
     public:
         Player();
 
