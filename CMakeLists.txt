@@ -30,9 +30,10 @@ add_library(Logger SHARED src/LogWriter.cpp src/ConsoleLogWriter.cpp)
 target_compile_definitions(Logger PRIVATE "BUILD_LOGGER=1")
 
 #D3D
-add_library(D3DUtils SHARED src/D3DUtils.cpp)
+add_library(D3DUtils SHARED src/D3DUtils.cpp src/D3DVideoProcessor.cpp)
 target_link_libraries(D3DUtils Logger d3d11.lib)
 target_compile_definitions(D3DUtils PRIVATE "BUILD_D3D_UTILS=1")
+target_compile_definitions(D3DUtils PRIVATE "D3D_DEBUG_INFO")
 
 #VideoPlayerCore
 add_library(VideoPlayerCore SHARED src/Player.cpp src/Util.cpp)
