@@ -5,9 +5,9 @@
 #include <cstdio>
 #include "ConsoleLogWriter.h"
 
-namespace Log {
+namespace XLog {
     void ConsoleLogWriter::Write(
-            Log::LogLevel level,
+            XLog::LogLevel level,
             const char *time,
             const char *message) {
         std::printf("%s %s %s\n", time, Logger::GetLogLevelName(level), message);

@@ -1,28 +1,42 @@
 #pragma once
-#ifndef UE_GAME
+// #ifndef UE_GAME
+//     #if BUILD_XVIDEO == 1
+//     #define XVIDEO_API __declspec( dllexport )
+//     #else
+//     #define XVIDEO_API __declspec( dllimport )
+//     #endif
+//
+//     #if BUILD_XLOG == 1
+//     #define LOG_API __declspec( dllexport )
+//     #else
+//     #define LOG_API __declspec( dllimport )
+//     #endif
+//
+//     #if BUILD_XGRAPHIC == 1
+//     #define D3D_UTILS_API __declspec( dllexport )
+//     #else
+//     #define D3D_UTILS_API __declspec( dllimport )
+//     #endif
+// #else
+//     #define XVIDEO_API
+//     #define LOG_API
+//     #define D3D_UTILS_API
+// #endif
 
-#if BUILD_VP==1
-#define VP_API __declspec( dllexport )
+#if BUILD_XVIDEO == 1
+#define XVIDEO_API __declspec( dllexport )
 #else
-#define VP_API __declspec( dllimport )
+#define XVIDEO_API __declspec( dllimport )
 #endif
 
-#if BUILD_LOGGER==1
+#if BUILD_XLOG == 1
 #define LOG_API __declspec( dllexport )
 #else
 #define LOG_API __declspec( dllimport )
 #endif
 
-#if BUILD_D3D_UTILS==1
+#if BUILD_XGRAPHIC == 1
 #define D3D_UTILS_API __declspec( dllexport )
 #else
 #define D3D_UTILS_API __declspec( dllimport )
-#endif
-
-#else
-
-#define VP_API
-#define LOG_API
-#define D3D_UTILS_API
-
 #endif

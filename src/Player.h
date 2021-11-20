@@ -7,8 +7,7 @@
 #include <vector>
 #include <mutex>
 
-// typedef void(*VideoFrameUpdateCallback)(void *ImageData, int32_t FrameIndex, int64_t FrameTime);
-typedef std::function<void(void *ImageData, int64_t FrameIndex, int64_t FrameTime, int32_t Width, int32_t Height)> VideoFrameUpdateCallback;
+typedef std::function<void(void *TextureDataPtr, int64_t TextureIndex, int64_t FrameIndex, double_t FrameShowTime, int32_t Width, int32_t Height)> VideoFrameUpdateCallback;
 
 struct AVFormatContext;
 struct AVStream;
@@ -20,13 +19,13 @@ struct AVFrame;
 struct SwsContext;
 struct AVBufferRef;
 
-namespace VP {
+namespace XVideo {
 
     using std::chrono::duration;
     using std::chrono::time_point;
     using std::chrono::steady_clock;
 
-    class VP_API Player final {
+    class XVIDEO_API Player final {
     public:
         Player();
 
@@ -57,6 +56,12 @@ namespace VP {
 
         void PlaybackTimer();
 
+        double_t FrameIndexToTime(int64_t InFrameIndex, int64_t InFrameRate);
+
+        int64_t TimeToFrameIndex(double_t InTimeSeconds, int64_t InFrameRate);
+
+        int64_t StreamFrameRate();
+
         static AVCodec *DetectCodec(int32_t CodecID);
 
         static AVStream *FindVideoStream(AVFormatContext *InFormatContext);
@@ -83,7 +88,7 @@ namespace VP {
         bool Start_ = false;// 解码状态，启动和停止
         bool Playing_ = false;// 播放状态，播放和暂停
         bool Loop_ = false;
-        duration<double> PlaybackTime_ = duration<double>(0);// 播放进度
+        double_t PlaybackTime_ = 0;// 播放进度
 
         // Decode params
         AVFormatContext *FormatContext_ = nullptr;
@@ -94,8 +99,10 @@ namespace VP {
         SwsContext *SwsContext_ = nullptr;
         int FrameWidth_ = 0;
         int FrameHeight_ = 0;
-        int64_t FramePTS_ = 0;// 单位：微秒
+        double_t FrameShowTime_ = 0;// 单位：秒
         uint8_t *ImageData_[4] = {nullptr, nullptr, nullptr, nullptr};
         int ImageLineSize[4] = {0, 0, 0, 0};
+
+        int64_t StreamTimeBase();
     };
 }

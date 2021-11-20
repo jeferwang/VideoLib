@@ -30,10 +30,17 @@ extern "C" {
 //                 return;\
 //             }
 
-using Log::Logger;
-using Log::LogLevel;
+// 毫秒
+#define TIME_BASE_MILLI_SECOND 1000
+// 微秒
+#define TIME_BASE_MICRO_SECOND 1000000
+// 纳秒
+#define TIME_BASE_NANO_SECOND 1000000000
 
-namespace VP {
+using XLog::Logger;
+using XLog::LogLevel;
+
+namespace XVideo {
     static AVPixelFormat get_hw_format(AVCodecContext *ctx, const AVPixelFormat *pix_fmts) {
         const AVPixelFormat HwPixFmt = *((AVPixelFormat *) (ctx->opaque));
         const AVPixelFormat *p;
@@ -130,13 +137,13 @@ namespace VP {
 
             // Print Video Info
             Logger::Write(LogLevel::Info,
-                       "VideoInfo: InFile=%s, Format=%s, CodecID=%s, Codec=%s, HwPixFmt=%s, Size=%dx%d, Length=%us, Fps=%f, FrameNum=%d",
-                       InUrl, FormatContext_->iformat->name, avcodec_get_name(Stream_->codecpar->codec_id), Codec->name,
-                       av_get_pix_fmt_name(CodecContext_->pix_fmt),
-                       Stream_->codecpar->width, Stream_->codecpar->height,
-                       av_rescale_q(Stream_->duration, Stream_->time_base, {1, 1000}) / 1000,
-                       av_q2d(Stream_->avg_frame_rate),
-                       Stream_->nb_frames);
+                          "VideoInfo: InFile=%s, Format=%s, CodecID=%s, Codec=%s, HwPixFmt=%s, Size=%dx%d, Length=%us, Fps=%f, FrameNum=%d",
+                          InUrl, FormatContext_->iformat->name, avcodec_get_name(Stream_->codecpar->codec_id), Codec->name,
+                          av_get_pix_fmt_name(CodecContext_->pix_fmt),
+                          Stream_->codecpar->width, Stream_->codecpar->height,
+                          av_rescale_q(Stream_->duration, Stream_->time_base, {1, 1000}) / 1000,
+                          av_q2d(Stream_->avg_frame_rate),
+                          Stream_->nb_frames);
 
             // Init Packet_
             if (Packet_ == nullptr) Packet_ = av_packet_alloc();
@@ -186,7 +193,7 @@ namespace VP {
             TimerThread_ = nullptr;
             {
                 std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
-                PlaybackTime_ = duration<double>(0);
+                PlaybackTime_ = 0;
             }
         }
 
@@ -229,7 +236,7 @@ namespace VP {
         }
         FrameWidth_ = 0;
         FrameHeight_ = 0;
-        FramePTS_ = 0;
+        FrameShowTime_ = 0;
         Init_ = false;
     }
 
@@ -255,7 +262,7 @@ namespace VP {
     void Player::PlaybackTimer() {
         {
             std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
-            PlaybackTime_ = duration<double>(0);
+            PlaybackTime_ = 0;
         }
 
         auto PrevTime = steady_clock::now();
@@ -266,10 +273,10 @@ namespace VP {
                 continue;
             } else {
                 auto CurrTime = steady_clock::now();
-                duration<double> Delta = CurrTime - PrevTime;
+                std::chrono::duration<double_t> Delta = CurrTime - PrevTime;
                 {
                     std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
-                    PlaybackTime_ += Delta;
+                    PlaybackTime_ += Delta.count();
                 }
                 PrevTime = CurrTime;
             }
@@ -277,7 +284,7 @@ namespace VP {
     }
 
     void Player::DoDecode() {
-        int32_t FrameIndex = -1;
+        int64_t FrameIndex = -1;
         bool HasPacket = false;
         bool HasFrame = false;
         int32_t ErrNum;
@@ -286,6 +293,19 @@ namespace VP {
             if (!Playing_) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));// 不处于播放状态
                 continue;
+            }
+            // 跳帧
+            {
+                // 最后一帧的时间到目前的时间大于500毫秒
+                if (PlaybackTime_ - FrameIndexToTime(FrameIndex + 1, StreamFrameRate()) > 0.5) {
+                    auto JumpTime = (int64_t) (PlaybackTime_ / av_q2d(Stream_->time_base));
+                    ErrNum = av_seek_frame(FormatContext_, Stream_->index, JumpTime, 0);
+                    AssertBreak(ErrNum >= 0, LogLevel::Error, "av_seek_frame failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
+                    FrameShowTime_ = PlaybackTime_;
+                    FrameIndex = TimeToFrameIndex(PlaybackTime_, StreamFrameRate());
+                    avcodec_flush_buffers(CodecContext_);
+                }
+
             }
 
             // Read next frame packet data
@@ -299,11 +319,11 @@ namespace VP {
                 if (ErrNum == AVERROR_EOF) {
                     if (!Loop_) break;
                     ErrNum = av_seek_frame(FormatContext_, Stream_->index, 0, 0);
-                    AssertBreak(ErrNum >= 0, LogLevel::Error, "avformat_open_input failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
+                    AssertBreak(ErrNum >= 0, LogLevel::Error, "av_seek_frame failed error=%d, msg=%s", ErrNum, av_err2str(ErrNum));
                     avcodec_flush_buffers(CodecContext_);
                     {
                         std::lock_guard<std::mutex> Lock(PlaybackTimeMutex_);
-                        PlaybackTime_ = duration<double>(0);
+                        PlaybackTime_ = 0;
                     }
                     FrameIndex = -1;
                     continue;
@@ -340,31 +360,53 @@ namespace VP {
             // Sleep until this frame show time
             {
                 // 当前帧的预期播放时间
-                FramePTS_ = (int64_t) FrameIndex * (int64_t) AV_TIME_BASE / int64_t(av_q2d(Stream_->avg_frame_rate));
-                // FramePTS_ = av_rescale_q(Frame_->pts, Stream_->time_base, AVRational{1, AV_TIME_BASE});//硬件加速不支持计算帧时间
-                while (FramePTS_ > (int64_t) (PlaybackTime_.count() * AV_TIME_BASE)) {
+                FrameShowTime_ = FrameIndexToTime(FrameIndex, StreamFrameRate());
+                // FrameShowTime_ = av_rescale_q(Frame_->pts, Stream_->time_base, AVRational{1, TIME_BASE_NANO_SECOND});//硬件加速不支持计算帧时间
+                while (FrameShowTime_ > PlaybackTime_) {
                     if (!Start_) break;
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));// 还没到该帧的显示时间
                 }
             }
-            Logger::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%d, PlaybackTime=%f", FrameIndex, FramePTS_, PlaybackTime_.count());
             for (auto &FrameUpdateCallback: FrameUpdateCallbacks_) {
                 switch (Frame_->format) {
-                    case AV_PIX_FMT_NV12:
+                    case AV_PIX_FMT_NV12: {
+                        Logger::Write(LogLevel::Info, "FrameIndex=%d, FrameTime=%f, PlaybackTime=%f", FrameIndex, FrameShowTime_, PlaybackTime_);
                         sws_scale(SwsContext_, Frame_->data, Frame_->linesize, 0, Frame_->height, ImageData_, ImageLineSize);//NV12转换成RGBA
-                        FrameUpdateCallback(ImageData_[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height);// 返回RGBA
+                        FrameUpdateCallback(ImageData_[0], 0, FrameIndex, FrameShowTime_, Frame_->width, Frame_->height);// 返回RGBA
                         break;
-                    case AV_PIX_FMT_D3D11:
-                        FrameUpdateCallback(Frame_->data[0], FrameIndex, FramePTS_, Frame_->width, Frame_->height);// 直接返回ID3D11Texture2D pointer
+                    }
+                    case AV_PIX_FMT_D3D11: {
+                        void *TexPtr = Frame_->data[0]; // 指向GPU纹理的指针
+                        auto TexArrayIdx = (int64_t) Frame_->data[1];// 这里看起来是个uint8_t*指针，其实指针的地址就是要取得的数据值
+                        Logger::Write(LogLevel::Info, "TexArrayIdx=%d, FrameIndex=%d, FrameTime=%f, PlaybackTime=%f", TexArrayIdx, FrameIndex, FrameShowTime_, PlaybackTime_);
+                        FrameUpdateCallback(TexPtr, TexArrayIdx, FrameIndex, FrameShowTime_, Frame_->width, Frame_->height);// 直接返回ID3D11Texture2D pointer
                         break;
-                    default:
+                    }
+                    default: {
                         Logger::Write(LogLevel::Error, "UnSupported PixFmt %d", (int64_t) CodecContext_->pix_fmt);
                         break;
+                    }
                 }
             }
         }
         av_packet_unref(Packet_);
         av_frame_unref(Frame_);
+    }
+
+    double_t Player::FrameIndexToTime(const int64_t InFrameIndex, const int64_t InFrameRate) {
+        return (double_t) InFrameIndex / (double_t) InFrameRate;
+    }
+
+    int64_t Player::TimeToFrameIndex(const double_t InTime, const int64_t InFrameRate) {
+        return int64_t((double_t) InTime * (double_t) InFrameRate);
+    }
+
+    int64_t Player::StreamFrameRate() {
+        return int64_t(av_q2d(Stream_->avg_frame_rate));
+    }
+
+    int64_t Player::StreamTimeBase() {
+        return int64_t(av_q2d(Stream_->time_base) * TIME_BASE_NANO_SECOND);
     }
 
     AVCodec *Player::DetectCodec(int32_t CodecID) {

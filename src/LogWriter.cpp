@@ -2,7 +2,7 @@
 #include <ctime>
 #include "LogWriter.h"
 
-namespace Log {
+namespace XLog {
     std::set<ILogWriter *> Logger::Writers;
 
     void Logger::RegisterLogger(ILogWriter *InWriter) {

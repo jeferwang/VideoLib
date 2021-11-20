@@ -2,7 +2,7 @@
 #include "dxgi.h"
 #include "d3d9.h"
 
-namespace VP {
+namespace XVideo {
     GpuType Util::DetectGPU() {
         GpuType Type = GpuType::UnKnown;
 

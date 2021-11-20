@@ -1,6 +1,6 @@
 #pragma once
 
-namespace VP {
+namespace XVideo {
     enum class GpuType {
         UnKnown = 0,
         NVIDIA = 1,

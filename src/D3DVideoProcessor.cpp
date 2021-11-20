@@ -1,18 +1,15 @@
 #include <cstdint>
-#include "D3DVideoProcessor.h"
 #include "d3d11.h"
-
-#define CheckRelease(RefPrt) \
-    if (RefPrt != nullptr) { \
-        RefPrt->Release(); \
-        RefPrt = nullptr; \
-    }
+#include "wrl/client.h"
+#include "D3DVideoProcessor.h"
+#include "D3DUtils.h"
 
 #define SetZero(Var) memset(&Var, 0, sizeof(Var));
 
+namespace XGraphic {
+    using Microsoft::WRL::ComPtr;
 
-namespace D3D {
-    bool VideoTextureProcessor::Initialize(void *InDevicePtr, const uint32_t InWidth, const uint32_t InHeight) {
+    bool VideoTextureProcessor::Initialize(const ComPtr<ID3D11Device> &InDevice, const uint32_t InWidth, const uint32_t InHeight) {
         if (bInit) return false;
 
         Width = InWidth;
@@ -20,21 +17,17 @@ namespace D3D {
 
         HRESULT Hr = -1;
 
-        Device = (ID3D11Device *) InDevicePtr;
+        Device = InDevice;
         if (Device == nullptr) return false;
-        Device->AddRef();
 
-        Device->GetImmediateContext(&DeviceContext);
+        Device->GetImmediateContext(DeviceContext.GetAddressOf());
         if (DeviceContext == nullptr) return false;
-        DeviceContext->AddRef();
 
-        Hr = Device->QueryInterface(_uuidof(ID3D11VideoDevice), (void **) &VideoDevice);
+        Hr = Device->QueryInterface(_uuidof(ID3D11VideoDevice), (void **) VideoDevice.GetAddressOf());
         if (VideoDevice == nullptr || FAILED(Hr)) return false;
-        VideoDevice->AddRef();
 
-        Hr = DeviceContext->QueryInterface(__uuidof(ID3D11VideoContext), (void **) &VideoContext);
+        Hr = DeviceContext->QueryInterface(__uuidof(ID3D11VideoContext), (void **) VideoContext.GetAddressOf());
         if (VideoContext == nullptr || FAILED(Hr)) return false;
-        VideoContext->AddRef();
 
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC VideoContentDesc;
         SetZero(VideoContentDesc);
@@ -47,62 +40,43 @@ namespace D3D {
         VideoContentDesc.OutputHeight = Height;
         VideoContentDesc.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
 
-        Hr = VideoDevice->CreateVideoProcessorEnumerator(&VideoContentDesc, &VideoProcessorEnumerator);
+        Hr = VideoDevice->CreateVideoProcessorEnumerator(&VideoContentDesc, VideoProcessorEnumerator.GetAddressOf());
         if (VideoProcessorEnumerator == nullptr || FAILED(Hr)) return false;
-        VideoProcessorEnumerator->AddRef();
 
-        Hr = VideoDevice->CreateVideoProcessor(VideoProcessorEnumerator, 0, &VideoProcessor);
+        Hr = VideoDevice->CreateVideoProcessor(VideoProcessorEnumerator.Get(), 0, VideoProcessor.GetAddressOf());
         if (VideoProcessor == nullptr || FAILED(Hr)) return false;
-        VideoProcessor->AddRef();
+
+        OutputTexture = TextureUtil::CreateVideoProcessOutputTexture_RGBA(Device, Width, Height);
 
         bInit = true;
         return true;
     }
 
-    VideoTextureProcessor::~VideoTextureProcessor() {
-        for (auto &It: InputViewMap) {
-            CheckRelease(It.second);
-        }
-        for (auto &It: OutputViewMap) {
-            CheckRelease(It.second);
-        }
-        CheckRelease(VideoProcessor);
-        CheckRelease(VideoProcessorEnumerator);
-        CheckRelease(VideoContext);
-        CheckRelease(VideoDevice);
-        CheckRelease(DeviceContext);
-        CheckRelease(Device);
-    }
-
-    bool VideoTextureProcessor::ConvertTexture(void *InTex, void *OutTex) {
+    bool VideoTextureProcessor::ProcessTexture(const ComPtr<ID3D11Texture2D> &InTex, const int64_t InTexArrayIdx) {
         HRESULT Hr = -1;
-
-        auto InTexDX11 = (ID3D11Texture2D *) InTex;
-        auto OutTexDX11 = (ID3D11Texture2D *) OutTex;
 
         if (InputViewMap.find(InTex) == InputViewMap.end()) {
             D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC InputViewDesc;
             SetZero(InputViewDesc);
             InputViewDesc.FourCC = 0;
             InputViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-            InputViewDesc.Texture2D = {0, 0};// MipSlice & ArraySlice
-            ID3D11VideoProcessorInputView *InputView;
-            Hr = VideoDevice->CreateVideoProcessorInputView(InTexDX11, VideoProcessorEnumerator, &InputViewDesc, &InputView);
-            if (InputView == nullptr || FAILED(Hr)) return false;
-            InputView->AddRef();
-            InputViewMap.insert(std::pair<void *, ID3D11VideoProcessorInputView *>(InTex, InputView));
+            InputViewDesc.Texture2D = {0, static_cast<uint32_t>(InTexArrayIdx)};// MipSlice & ArraySlice
+            ComPtr<ID3D11VideoProcessorInputView> InputView;
+            Hr = VideoDevice->CreateVideoProcessorInputView(InTex.Get(), VideoProcessorEnumerator.Get(), &InputViewDesc, InputView.GetAddressOf());
+            if (InputView == nullptr || FAILED(Hr))
+                return false;
+            InputViewMap.insert(std::pair<ComPtr<ID3D11Texture2D>, ComPtr<ID3D11VideoProcessorInputView>>(InTex, InputView));
         }
 
         if (OutputViewMap.find(InTex) == OutputViewMap.end()) {
-            D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC OutputViewDesc = { D3D11_VPOV_DIMENSION_TEXTURE2D };
-            // D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC OutputViewDesc;
-            // SetZero(OutputViewDesc);
-            // OutputViewDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-            ID3D11VideoProcessorOutputView *OutputView;
-            Hr = VideoDevice->CreateVideoProcessorOutputView(OutTexDX11, VideoProcessorEnumerator, &OutputViewDesc, &OutputView);
-            if (OutputView == nullptr || FAILED(Hr)) return false;
-            OutputView->AddRef();
-            OutputViewMap.insert(std::pair<void *, ID3D11VideoProcessorOutputView *>(OutTex, OutputView));
+            D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC OutputViewDesc;
+            SetZero(OutputViewDesc);
+            OutputViewDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+            ComPtr<ID3D11VideoProcessorOutputView> OutputView;
+            Hr = VideoDevice->CreateVideoProcessorOutputView(OutputTexture.Get(), VideoProcessorEnumerator.Get(), &OutputViewDesc, &OutputView);
+            if (OutputView == nullptr || FAILED(Hr))
+                return false;
+            OutputViewMap.insert(std::pair<ComPtr<ID3D11Texture2D>, ComPtr<ID3D11VideoProcessorOutputView>>(OutputTexture.Get(), OutputView));
         }
 
         D3D11_VIDEO_PROCESSOR_STREAM Stream;
@@ -113,13 +87,27 @@ namespace D3D {
         Stream.PastFrames = 0;
         Stream.FutureFrames = 0;
         Stream.ppPastSurfaces = nullptr;
-        Stream.pInputSurface = InputViewMap[InTex];
+        Stream.pInputSurface = InputViewMap[InTex].Get();
         Stream.ppFutureSurfaces = nullptr;
         Stream.ppPastSurfacesRight = nullptr;
         Stream.pInputSurfaceRight = nullptr;
         Stream.ppFutureSurfacesRight = nullptr;
 
-        Hr = VideoContext->VideoProcessorBlt(VideoProcessor, OutputViewMap[OutTex], 0, 1, &Stream);
-        return FAILED(Hr) ? false : true;
+        Hr = VideoContext->VideoProcessorBlt(VideoProcessor.Get(), OutputViewMap[OutputTexture].Get(), 0, 1, &Stream);
+        if (FAILED(Hr))
+            return false;
+
+        auto Context = TextureUtil::GetDeviceContext(Device);
+        Context->Flush();
+        return true;
+    }
+
+    void *VideoTextureProcessor::GetOutputTexture() {
+        return OutputTexture.Get();
+    }
+
+    bool VideoTextureProcessor::ProcessTexture(void *InTex, const int64_t InTexArrayIdx) {
+        ComPtr<ID3D11Texture2D> Tex = (ID3D11Texture2D *) InTex;
+        return ProcessTexture(Tex, InTexArrayIdx);
     }
 }

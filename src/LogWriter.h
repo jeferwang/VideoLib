@@ -3,7 +3,7 @@
 #include "Base.h"
 #include <set>
 
-namespace Log {
+namespace XLog {
     enum class LogLevel {
         Debug = 0,
         Info,

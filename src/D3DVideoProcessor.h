@@ -1,7 +1,8 @@
 #pragma once
 
-#include "Base.h"
 #include <map>
+#include "wrl/client.h"
+#include "Base.h"
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
@@ -11,27 +12,36 @@ struct ID3D11VideoProcessorEnumerator;
 struct ID3D11VideoProcessor;
 struct ID3D11VideoProcessorInputView;
 struct ID3D11VideoProcessorOutputView;
-namespace D3D {
+struct ID3D11Texture2D;
+namespace XGraphic {
+
+    using Microsoft::WRL::ComPtr;
+
     class D3D_UTILS_API VideoTextureProcessor final {
     public:
-        ~VideoTextureProcessor();
+        ~VideoTextureProcessor() = default;
 
-        bool Initialize(void *InDevicePtr, uint32_t InWidth, uint32_t InHeight);
+        bool Initialize(const ComPtr<ID3D11Device> &InDevice, uint32_t InWidth, uint32_t InHeight);
 
-        bool ConvertTexture(void *InTex, void *OutTex);
+        bool ProcessTexture(void *InTex, int64_t InTexArrayIdx);
+
+        bool ProcessTexture(const ComPtr<ID3D11Texture2D> &InTex, int64_t InTexArrayIdx);
+
+        void *GetOutputTexture();
 
     private:
         bool bInit = false;
         uint32_t Width = 0;
         uint32_t Height = 0;
-        ID3D11Device *Device = nullptr;
-        ID3D11DeviceContext *DeviceContext = nullptr;
-        ID3D11VideoDevice *VideoDevice = nullptr;
-        ID3D11VideoContext *VideoContext = nullptr;
-        ID3D11VideoProcessorEnumerator *VideoProcessorEnumerator = nullptr;
-        ID3D11VideoProcessor *VideoProcessor = nullptr;
-        std::map<void *, ID3D11VideoProcessorInputView *> InputViewMap;
-        std::map<void *, ID3D11VideoProcessorOutputView *> OutputViewMap;
+        ComPtr<ID3D11Texture2D> OutputTexture;
+        ComPtr<ID3D11Device> Device;
+        ComPtr<ID3D11DeviceContext> DeviceContext;
+        ComPtr<ID3D11VideoDevice> VideoDevice;
+        ComPtr<ID3D11VideoContext> VideoContext;
+        ComPtr<ID3D11VideoProcessorEnumerator> VideoProcessorEnumerator;
+        ComPtr<ID3D11VideoProcessor> VideoProcessor;
+        std::map<ComPtr<ID3D11Texture2D>, ComPtr<ID3D11VideoProcessorInputView>> InputViewMap;
+        std::map<ComPtr<ID3D11Texture2D>, ComPtr<ID3D11VideoProcessorOutputView>> OutputViewMap;
     };
 }
 
